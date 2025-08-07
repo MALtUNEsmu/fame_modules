@@ -87,13 +87,18 @@ class EmailHeader(ProcessingModule):
         try:
             r = dateutil.parser.parse(line, fuzzy=True)
             r = r.astimezone(tz.tzutc())
+            return r
         # if the fuzzy parser failed to parse the line due to
         # incorrect timezone information issue 5 GitHub
-        except ValueError:
-            r = re.findall("^(.*?)\s*\(", line)
-            if r:
-                r = dateutil.parser.parse(r[0])
-        return r
+        except (ValueError, dateutil.parser._parser.ParserError):
+            for regex in ["^(.*?)\s*\(", "\s*?(.+) UTC", "by.+\)\s(.+)"]:
+                r = re.findall(regex, line)
+                if r:
+                    try:
+                        r = dateutil.parser.parse(r[0])
+                        return r
+                    except dateutil.parser._parser.ParserError:
+                        pass
 
     # This code is originally from https://github.com/lnxg33k/MHA
     def parse_received(self, received):
@@ -104,8 +109,10 @@ class EmailHeader(ProcessingModule):
             for i in range(len(received)):
                 if ";" in received[i]:
                     line = received[i].split(";")
-                else:
+                elif "\r\n" in received[i]:
                     line = received[i].split("\r\n")
+                else:
+                    line = received[i].split("\n")
                 line = list(map(str.strip, line))
                 line = [x.replace("\r\n", "") for x in line]
 
@@ -140,25 +147,25 @@ class EmailHeader(ProcessingModule):
                         line[0],
                         re.DOTALL | re.X,
                     )
+                if data:
+                    data = [x.replace("\n", " ") for x in list(map(str.strip, data[0]))]
+                    timeline = [
+                        {
+                            "order": str(index - 1),
+                            "delay": "",
+                            "from": data[0],
+                            "to": data[1],
+                            "protocol": data[2],
+                            "timestamp": org_time.strftime("%m/%d/%Y %I:%M:%S %p"),
+                        }
+                    ] + timeline
 
-                data = [x.replace("\n", " ") for x in list(map(str.strip, data[0]))]
-                timeline = [
-                    {
-                        "order": str(index - 1),
-                        "delay": "",
-                        "from": data[0],
-                        "to": data[1],
-                        "protocol": data[2],
-                        "timestamp": org_time.strftime("%m/%d/%Y %I:%M:%S %p"),
-                    }
-                ] + timeline
-
-                if last_timestamp:
-                    timeline[1]["delay"] = self.delay_to_string(
-                        relativedelta.relativedelta(last_timestamp, org_time)
-                    )
-                last_timestamp = org_time
-                index -= 1
+                    if last_timestamp:
+                        timeline[1]["delay"] = self.delay_to_string(
+                            relativedelta.relativedelta(last_timestamp, org_time)
+                        )
+                    last_timestamp = org_time
+                    index -= 1
 
         return timeline
 
@@ -209,7 +216,9 @@ class EmailHeader(ProcessingModule):
         self.results["Cc"] = decode_mime_words(parsed_headers["Cc"])
 
         # Parse Received and Authentication Headers
-        self.results["Received"] = self.parse_received(parsed_headers.get_all("Received"))
+        self.results["Received"] = self.parse_received(
+            parsed_headers.get_all("Received")
+        )
         self.results["DKIM"] = self.parse_dkim(list(parsed_headers.items()))
         self.results["SPF"] = self.parse_spf(list(parsed_headers.items()))
         self.results["DMARC"] = self.parse_dmarc(list(parsed_headers.items()))

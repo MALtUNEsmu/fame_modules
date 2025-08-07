@@ -1,6 +1,7 @@
 # coding: utf-8
 import os
 import re
+import mimetypes
 
 try:
     # Use https://github.com/mattgwwalker/msg-extractor to read .msg files
@@ -34,24 +35,28 @@ class MSG(ProcessingModule):
 
         for attachment in attachments:
             if attachment.type == msg_enums.AttachmentType.MSG:
-                attachment.save(customPath=outdir, useMsgFilename=True)
+                try:
+                    attachment.save(customPath=outdir, useMsgFilename=True)
+                except (extract_msg.exceptions.DataNotFoundError, AttributeError):
+                    pass
+                else:
+                    folder = os.path.splitext(os.path.split(attachment.data.filename)[1])[0]
+                    folder = msg_utils.prepareFilename(folder)[:256]
+                    for file in os.listdir("%s%s%s" % (outdir, os.path.sep, folder)):
+                        paths.append("%s%s%s%s%s" % (outdir, os.path.sep, folder, os.path.sep, file))
 
-                folder = os.path.splitext(os.path.split(attachment.data.filename)[1])[0]
-                folder = msg_utils.prepareFilename(folder)[:256]
-                for file in os.listdir("%s%s%s" % (outdir, os.path.sep, folder)):
-                    paths.append("%s%s%s%s%s" % (outdir, os.path.sep, folder, os.path.sep, file))
-            else:
-                attachment.save(customPath=outdir)
+            attachment.save(customPath=outdir, extractEmbedded=True)
 
-                filename = msg_utils.inputToString(attachment.getFilename(), attachment.msg.stringEncoding)
-                paths.append("%s%s%s" % (outdir, os.path.sep, msg_utils.prepareFilename(filename)))
+            filename = msg_utils.inputToString(attachment.getFilename(), attachment.msg.stringEncoding)
+            paths.append("%s%s%s" % (outdir, os.path.sep, msg_utils.prepareFilename(filename)))
         return paths
 
     def extract_urls(self, mail):
         regex_url = r"\w+:(\/\/)[^\s]+"
         reg = re.compile(regex_url)
-        for match in reg.finditer(mail.body):
-            self.add_ioc(match.group(0).strip(">"))
+        if mail.body:
+            for match in reg.finditer(mail.body):
+                self.add_ioc(match.group(0).strip(">"))
 
     def register_header(self, header, outdir):
         fpath = os.path.join(outdir, '__header')
@@ -63,7 +68,11 @@ class MSG(ProcessingModule):
 
     def add_attachments(self, paths):
         for path in paths:
-            self.add_extracted_file(path)
+            mime = mimetypes.guess_type(path)[0]
+            if mime in ['image/jpeg', 'image/png', 'image/bmp', 'image/avif']:
+                self.register_files(mime.split('/')[1], path)
+            elif mime not in ['text/plain']:
+                self.add_extracted_file(path)
 
     def each(self, target):
         mail = extract_msg.Message(target)
@@ -87,5 +96,6 @@ class MSG(ProcessingModule):
 
             #extract urls
             self.extract_urls(mail)
+            return True
         else:
             self.log('error', 'extract_msg could not parse message')
