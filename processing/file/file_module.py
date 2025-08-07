@@ -52,6 +52,6 @@ class File(ProcessingModule):
 
         if file_type != "url":
             # Execute diec inside Docker container and parse output
-            self.detect_it_easy(target)
+            self.file(target)
 
         return len(self.results) > 0
